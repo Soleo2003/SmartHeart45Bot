@@ -1,53 +1,81 @@
 import os
-from flask import Flask, request
+from flask import Flask, request, abort
 import telebot
+from telebot import types
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.environ["TELEGRAM_TOKEN"]
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# Обработка команды /start
-@bot.message_handler(commands=['start'])
+PAYMENT_LINKS = {
+    "basic": ("Basic", "$24.99", "https://buy.stripe.com/fZu14n2OK9v95w89Tp2B204"),
+    "optimal": ("Optimal", "$34.99", "https://buy.stripe.com/eVq5kD9d8bDhf6Ic1x2B208"),
+    "premium": ("Premium", "$59.99", "https://buy.stripe.com/5kQ5kDgFA6iX0bO0iP2B209"),
+    "vip": ("VIP", "$369.99", "https://buy.stripe.com/00w00jdto6iX6AcghN2B207"),
+}
+
+def main_menu():
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Выбрать тариф", callback_data="plans"))
+    return keyboard
+
+@bot.message_handler(commands=["start"])
 def send_welcome(message):
     intro = (
-        "💓 *HeartAge 45*\n\n"
-        "Антиэйдж и снижение холестерина за 45 дней\n"
-        "Снижение веса и холестерина без голода и крайностей\n\n"
-        "🔬 *Что такое HeartAge 45?*\n"
-        "HeartAge 45 — это авторская программа питания от кардиолога Ольги Бокерия, "
-        "разработанная для тех, кто хочет не просто похудеть, а замедлить старение организма, "
-        "снизить холестерин, и улучшить здоровье сердца и сосудов — без строгих диет и истощающих ограничений.\n\n"
-        "Это 45-дневный научно обоснованный план питания с четкой структурой, удобным меню и адаптацией под повседневную жизнь.\n\n"
-        "💡 *Для кого этот план:*\n"
-        "• Для тех, кто хочет похудеть безопасно и стабильно\n"
-        "• Для людей с повышенным холестерином, давлением или сахаром\n"
-        "• Для тех, кто стремится замедлить процессы старения и сохранить молодость\n"
-        "• Для занятых, кто хочет четкую систему без подсчета калорий и стресса\n\n"
-        "🥗 *Что включает программа:*\n"
-        "• Подробное меню на каждый день\n"
-        "• Рекомендации по режиму, воде, физической активности и биохакингу\n"
-        "• Продукты, поддерживающие здоровье сосудов, мозга и кожи\n"
-        "• Медицинские пояснения: почему именно так и что происходит в организме\n\n"
-        "🔄 *Результаты, которых можно ожидать:*\n"
-        "• Снижение веса от 4 до 7 кг (в зависимости от начальных параметров)\n"
-        "• Снижение уровня плохого холестерина (LDL)\n"
-        "• Повышение энергии, улучшение сна и пищеварения\n"
-        "• Снижение воспаления и омоложение кожи\n\n"
-        "🚀 *Не ждите!* Присоединяйтесь сегодня и поверните время вспять!"
+        "💓 *SmartHeart 45*\n\n"
+        "45-дневная программа питания и здоровых привычек.\n"
+        "Меню, рекомендации по питанию, активности и образу жизни.\n\n"
+        "Выберите тариф, чтобы узнать стоимость программы.\n\n"
+        "Программа носит образовательный характер и не заменяет консультацию врача."
     )
-    bot.send_message(message.chat.id, intro, parse_mode="Markdown")
+    bot.send_message(message.chat.id, intro, parse_mode="Markdown", reply_markup=main_menu())
 
-# Обработка вебхука
-@app.route('/webhook', methods=['POST'])
+@bot.message_handler(commands=["plans"])
+def show_plans(message):
+    send_payment_options(message.chat.id)
+
+def send_payment_options(chat_id):
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton("Международная карта (USD)", callback_data="international"))
+    keyboard.add(types.InlineKeyboardButton("Российская карта (RUB)", callback_data="russian"))
+    bot.send_message(chat_id, "Как вы планируете оплачивать?", reply_markup=keyboard)
+
+@bot.callback_query_handler(func=lambda call: call.data in ("plans", "international", "russian"))
+def handle_choice(call):
+    bot.answer_callback_query(call.id)
+    if call.data == "plans":
+        send_payment_options(call.message.chat.id)
+    elif call.data == "international":
+        keyboard = types.InlineKeyboardMarkup()
+        for name, price, url in PAYMENT_LINKS.values():
+            keyboard.add(types.InlineKeyboardButton(f"{name} — {price}", url=url))
+        bot.send_message(
+            call.message.chat.id,
+            "Выберите тариф SmartHeart 45.\n"
+            "Оплата откроется на защищённой странице Stripe.\n\n"
+            "После оплаты сохраните квитанцию. "
+            "Автоматическая выдача доступа пока настраивается.",
+            reply_markup=keyboard,
+        )
+    else:
+        bot.send_message(
+            call.message.chat.id,
+            "Оплата российской картой пока настраивается через отдельный сервис. "
+            "Российской картой через Stripe оплачивать не нужно."
+        )
+
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
+    if secret and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != secret:
+        abort(403)
+    update = telebot.types.Update.de_json(request.get_data(as_text=True))
     bot.process_new_updates([update])
-    return 'OK', 200
+    return "OK", 200
 
-# Проверочный маршрут
 @app.route("/", methods=["GET"])
 def index():
     return "SmartHeart 45 бот работает!", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
