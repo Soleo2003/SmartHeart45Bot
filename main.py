@@ -58,10 +58,17 @@ def handle_choice(call):
             reply_markup=keyboard,
         )
     else:
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(
+            types.InlineKeyboardButton(
+                "Остановите атеросклероз — 8 000 ₽",
+                url="https://olgabockeria.kassa.bizon365.ru/buy/ostanovite-ateroskleroz/",
+            )
+        )
         bot.send_message(
             call.message.chat.id,
-            "Оплата российской картой пока настраивается через отдельный сервис. "
-            "Российской картой через Stripe оплачивать не нужно."
+            "Оформите заказ на странице Bizon365.",
+            reply_markup=keyboard,
         )
 
 @app.route("/webhook", methods=["POST"])
