@@ -1,4 +1,7 @@
 import os
+import secrets
+import sqlite3
+from contextlib import closing
 from flask import Flask, request, abort
 import telebot
 from telebot import types
@@ -58,19 +61,53 @@ def handle_choice(call):
             reply_markup=keyboard,
         )
     else:
-        keyboard = types.InlineKeyboardMarkup()
-        keyboard.add(
-            types.InlineKeyboardButton(
-                "Остановите атеросклероз — 8 000 ₽",
-                url="https://olgabockeria.kassa.bizon365.ru/buy/ostanovite-ateroskleroz/",
+        if call.message.chat.type != "private":
+            bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
+            return
+
+        request_id = secrets.token_hex(16)
+        db_path = os.getenv("PAYMENTS_DB_PATH", "payment_requests.sqlite3")
+
+        with closing(sqlite3.connect(db_path)) as db, db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS payment_requests (
+                    request_id TEXT PRIMARY KEY,
+                    telegram_user_id INTEGER NOT NULL,
+                    telegram_chat_id INTEGER NOT NULL,
+                    product_id TEXT NOT NULL,
+                    amount_rub INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            db.execute(
+                """
+                INSERT INTO payment_requests
+                    (request_id, telegram_user_id, telegram_chat_id, product_id, amount_rub)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    call.from_user.id,
+                    call.message.chat.id,
+                    "ostanovite-ateroskleroz",
+                    8000,
+                ),
             )
+
+        payment_url = (
+            "https://olgabockeria.kassa.bizon365.ru/buy/ostanovite-ateroskleroz/"
+            f"?utm_content={request_id}"
         )
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(types.InlineKeyboardButton(
+            "Остановите атеросклероз — 8 000 ₽",
+            url=payment_url,
+        ))
         bot.send_message(
             call.message.chat.id,
-            "Оформите заказ на странице Bizon365.",
+            "Оформите заказ по вашей ссылке Bizon365.",
             reply_markup=keyboard,
         )
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
