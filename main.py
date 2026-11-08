@@ -26,6 +26,17 @@ RUBLE_PLANS = {
 RUBLE_CHOICES = {f"rub:{key}": plan for key, plan in RUBLE_PLANS.items()}
 
 
+TARIFF_DESCRIPTION = (
+    "💓 *Выберите тариф HeartAge 45*\n\n"
+    "*Basic*\nПлан питания на 45 дней с меню на каждый день.\n\n"
+    "*Optimal*\nВсё из Basic плюс программа эмоционального детокса "
+    "«Секреты гармонии и радости».\n\n"
+    "*Premium*\nВсё из Optimal плюс поддержка в чате и ответы на вопросы от команды.\n\n"
+    "*VIP*\nВсё из Premium плюс личная консультация на 30 минут, "
+    "индивидуальный разбор питания, анализ рисков и персональные рекомендации."
+)
+
+
 def main_menu():
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(types.InlineKeyboardButton("Купить программу на 45 дней", callback_data="plans"))
@@ -99,10 +110,11 @@ def handle_choice(call):
             keyboard.add(types.InlineKeyboardButton(f"{name} — {price}", url=url))
         bot.send_message(
             call.message.chat.id,
-            "Выберите тариф SmartHeart 45.\n"
+            TARIFF_DESCRIPTION + "\n\n"
             "Оплата откроется на защищённой странице Stripe.\n\n"
             "После оплаты сохраните квитанцию. "
             "Автоматическая выдача доступа пока настраивается.",
+            parse_mode="Markdown",
             reply_markup=keyboard,
         )
     elif call.data == "russian":
@@ -115,7 +127,12 @@ def handle_choice(call):
                 f"{name} — {amount:,} ₽".replace(",", " "),
                 callback_data=callback,
             ))
-        bot.send_message(call.message.chat.id, "Выберите тариф HeartAge 45.", reply_markup=keyboard)
+        bot.send_message(
+            call.message.chat.id,
+            TARIFF_DESCRIPTION + "\n\nНажмите кнопку с выбранным тарифом, чтобы перейти к оплате.",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
     else:
         if call.message.chat.type != "private":
             bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
