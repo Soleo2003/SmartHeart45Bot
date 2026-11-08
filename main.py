@@ -1,4 +1,7 @@
 import os
+import secrets
+import sqlite3
+from contextlib import closing
 from flask import Flask, request, abort
 import telebot
 from telebot import types
@@ -13,6 +16,15 @@ PAYMENT_LINKS = {
     "premium": ("Premium", "$59.99", "https://buy.stripe.com/5kQ5kDgFA6iX0bO0iP2B209"),
     "vip": ("VIP", "$369.99", "https://buy.stripe.com/00w00jdto6iX6AcghN2B207"),
 }
+
+RUBLE_PLANS = {
+    "basic": ("Basic", 1990, "plan-pitaniya-ostanovit-ateroskleroz-bazovyi"),
+    "optimal": ("Optimal", 2590, "plan-pitaniya-ostanovit-ateroskleroz-optimalnyi"),
+    "premium": ("Premium", 4590, "plan-pitaniya-ostanovit-ateroskleroz-premialnyi"),
+    "vip": ("VIP", 29990, "ostanovite-ateroskleroz"),
+}
+RUBLE_CHOICES = {f"rub:{key}": plan for key, plan in RUBLE_PLANS.items()}
+
 
 def main_menu():
     keyboard = types.InlineKeyboardMarkup()
@@ -76,7 +88,7 @@ def send_payment_options(chat_id):
     keyboard.add(types.InlineKeyboardButton("Российская карта (RUB)", callback_data="russian"))
     bot.send_message(chat_id, "Как вы планируете оплачивать?", reply_markup=keyboard)
 
-@bot.callback_query_handler(func=lambda call: call.data in ("plans", "international", "russian"))
+@bot.callback_query_handler(func=lambda call: call.data in ("plans", "international", "russian") or call.data in RUBLE_CHOICES)
 def handle_choice(call):
     bot.answer_callback_query(call.id)
     if call.data == "plans":
@@ -93,13 +105,66 @@ def handle_choice(call):
             "Автоматическая выдача доступа пока настраивается.",
             reply_markup=keyboard,
         )
+    elif call.data == "russian":
+        if call.message.chat.type != "private":
+            bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
+            return
+        keyboard = types.InlineKeyboardMarkup()
+        for callback, (name, amount, _) in RUBLE_CHOICES.items():
+            keyboard.add(types.InlineKeyboardButton(
+                f"{name} — {amount:,} ₽".replace(",", " "),
+                callback_data=callback,
+            ))
+        bot.send_message(call.message.chat.id, "Выберите тариф HeartAge 45.", reply_markup=keyboard)
     else:
+        if call.message.chat.type != "private":
+            bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
+            return
+
+        name, amount, product_id = RUBLE_CHOICES[call.data]
+        request_id = secrets.token_hex(16)
+        db_path = os.getenv("PAYMENTS_DB_PATH", "payment_requests.sqlite3")
+
+        with closing(sqlite3.connect(db_path)) as db, db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS payment_requests (
+                    request_id TEXT PRIMARY KEY,
+                    telegram_user_id INTEGER NOT NULL,
+                    telegram_chat_id INTEGER NOT NULL,
+                    product_id TEXT NOT NULL,
+                    amount_rub INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            db.execute(
+                """
+                INSERT INTO payment_requests
+                    (request_id, telegram_user_id, telegram_chat_id, product_id, amount_rub)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    call.from_user.id,
+                    call.message.chat.id,
+                    product_id,
+                    amount,
+                ),
+            )
+
+        payment_url = (
+            f"https://olgabockeria.kassa.bizon365.ru/buy/{product_id}/"
+            f"?utm_content={request_id}"
+        )
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(types.InlineKeyboardButton(
+            f"Оплатить {name} — {amount:,} ₽".replace(",", " "),
+            url=payment_url,
+        ))
         bot.send_message(
             call.message.chat.id,
-            "Оплата российской картой пока настраивается через отдельный сервис. "
-            "Российской картой через Stripe оплачивать не нужно."
+            "Оформите заказ по вашей ссылке Bizon365.",
+            reply_markup=keyboard,
         )
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
