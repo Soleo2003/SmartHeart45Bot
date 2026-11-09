@@ -18,6 +18,16 @@ RUBLE_PLANS = {
 }
 RUBLE_CHOICES = {f"rub:{key}": plan for key, plan in RUBLE_PLANS.items()}
 
+USD_PLANS = {
+    "basic": ("Basic", 2499, "heartage45-basic-usd"),
+    "optimal": ("Optimal", 3499, "heartage45-optimal-usd"),
+    "premium": ("Premium", 5999, "heartage45-premium-usd"),
+    "vip": ("VIP", 36999, "heartage45-vip-usd"),
+}
+USD_CHOICES = {f"usd:{key}": plan for key, plan in USD_PLANS.items()}
+PLAN_CHOICES = {f"plan:{key}": key for key in RUBLE_PLANS}
+
+
 
 TARIFF_DESCRIPTION = (
     "💓 *Выберите тариф HeartAge 45*\n\n"
@@ -88,72 +98,104 @@ def show_plans(message):
 
 def send_payment_options(chat_id):
     keyboard = types.InlineKeyboardMarkup()
-    for callback, (name, amount, _) in RUBLE_CHOICES.items():
-        keyboard.add(types.InlineKeyboardButton(
-            f"{name} — {amount:,} ₽".replace(",", " "),
-            callback_data=callback,
-        ))
+    for key, (name, rubles, _) in RUBLE_PLANS.items():
+        dollars = USD_PLANS[key][1] / 100
+        label = f"{name} — {rubles:,} ₽ / ${dollars:.2f}".replace(",", " ")
+        keyboard.add(types.InlineKeyboardButton(label, callback_data=f"plan:{key}"))
     bot.send_message(
         chat_id,
-        TARIFF_DESCRIPTION + "\n\nНажмите кнопку с выбранным тарифом, чтобы перейти к оплате через Bizon365.",
+        TARIFF_DESCRIPTION + "\n\nВыберите тариф, затем валюту оплаты. Оплата проходит через Bizon365.",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
 
-@bot.callback_query_handler(func=lambda call: call.data in ("plans", "international", "russian") or call.data in RUBLE_CHOICES)
+@bot.callback_query_handler(func=lambda call: call.data in ("plans", "international", "russian") or call.data in PLAN_CHOICES or call.data in RUBLE_CHOICES or call.data in USD_CHOICES)
 def handle_choice(call):
     bot.answer_callback_query(call.id)
     if call.data in ("plans", "international", "russian"):
         send_payment_options(call.message.chat.id)
-    else:
-        if call.message.chat.type != "private":
-            bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
-            return
-
-        name, amount, product_id = RUBLE_CHOICES[call.data]
-        request_id = secrets.token_hex(16)
-        db_path = os.getenv("PAYMENTS_DB_PATH", "payment_requests.sqlite3")
-
-        with closing(sqlite3.connect(db_path)) as db, db:
-            db.execute("""
-                CREATE TABLE IF NOT EXISTS payment_requests (
-                    request_id TEXT PRIMARY KEY,
-                    telegram_user_id INTEGER NOT NULL,
-                    telegram_chat_id INTEGER NOT NULL,
-                    product_id TEXT NOT NULL,
-                    amount_rub INTEGER NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            db.execute(
-                """
-                INSERT INTO payment_requests
-                    (request_id, telegram_user_id, telegram_chat_id, product_id, amount_rub)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    request_id,
-                    call.from_user.id,
-                    call.message.chat.id,
-                    product_id,
-                    amount,
-                ),
-            )
-
-        payment_url = (
-            f"https://olgabockeria.kassa.bizon365.ru/buy/{product_id}/"
-            f"?utm_content={request_id}"
-        )
+        return
+    if call.message.chat.type != "private":
+        bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
+        return
+    if call.data in PLAN_CHOICES:
+        key = PLAN_CHOICES[call.data]
+        name, rubles, _ = RUBLE_PLANS[key]
+        dollars = USD_PLANS[key][1] / 100
         keyboard = types.InlineKeyboardMarkup()
         keyboard.add(types.InlineKeyboardButton(
-            f"Оплатить {name} — {amount:,} ₽".replace(",", " "),
-            url=payment_url,
+            f"Оплатить {rubles:,} ₽".replace(",", " "),
+            callback_data=f"rub:{key}",
+        ))
+        keyboard.add(types.InlineKeyboardButton(
+            f"Оплатить ${dollars:.2f}",
+            callback_data=f"usd:{key}",
         ))
         bot.send_message(
             call.message.chat.id,
-            "Оформите заказ по вашей ссылке Bizon365.",
+            f"Тариф {name}. Выберите валюту оплаты.",
             reply_markup=keyboard,
         )
+        return
+
+    currency = "RUB" if call.data in RUBLE_CHOICES else "USD"
+    name, amount, product_id = (RUBLE_CHOICES if currency == "RUB" else USD_CHOICES)[call.data]
+    amount_minor = amount * 100 if currency == "RUB" else amount
+    request_id = secrets.token_hex(16)
+    db_path = os.getenv("PAYMENTS_DB_PATH", "payment_requests.sqlite3")
+
+    with closing(sqlite3.connect(db_path, timeout=15)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS checkout_requests (
+                request_id TEXT PRIMARY KEY,
+                telegram_user_id INTEGER NOT NULL,
+                telegram_chat_id INTEGER NOT NULL,
+                product_id TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        legacy_exists = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'payment_requests'"
+        ).fetchone()
+        if legacy_exists:
+            db.execute("""
+                INSERT OR IGNORE INTO checkout_requests
+                    (request_id, telegram_user_id, telegram_chat_id, product_id,
+                     currency, amount_minor, created_at)
+                SELECT request_id, telegram_user_id, telegram_chat_id, product_id,
+                       'RUB', amount_rub * 100, created_at
+                FROM payment_requests
+            """)
+        db.execute(
+            """
+            INSERT INTO checkout_requests
+                (request_id, telegram_user_id, telegram_chat_id,
+                 product_id, currency, amount_minor)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (request_id, call.from_user.id, call.message.chat.id,
+             product_id, currency, amount_minor),
+        )
+
+    payment_url = (
+        f"https://olgabockeria.kassa.bizon365.ru/buy/{product_id}/"
+        f"?utm_content={request_id}"
+    )
+    price = f"{amount:,} ₽".replace(",", " ") if currency == "RUB" else f"${amount / 100:.2f}"
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(types.InlineKeyboardButton(
+        f"Оплатить {name} — {price}",
+        url=payment_url,
+    ))
+    bot.send_message(
+        call.message.chat.id,
+        "Оформите заказ по вашей ссылке Bizon365.",
+        reply_markup=keyboard,
+    )
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
