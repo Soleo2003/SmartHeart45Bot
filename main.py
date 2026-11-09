@@ -10,13 +10,6 @@ TOKEN = os.environ["TELEGRAM_TOKEN"]
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-PAYMENT_LINKS = {
-    "basic": ("Basic", "$24.99", "https://buy.stripe.com/fZu14n2OK9v95w89Tp2B204"),
-    "optimal": ("Optimal", "$34.99", "https://buy.stripe.com/eVq5kD9d8bDhf6Ic1x2B208"),
-    "premium": ("Premium", "$59.99", "https://buy.stripe.com/5kQ5kDgFA6iX0bO0iP2B209"),
-    "vip": ("VIP", "$369.99", "https://buy.stripe.com/00w00jdto6iX6AcghN2B207"),
-}
-
 RUBLE_PLANS = {
     "basic": ("Basic", 1990, "plan-pitaniya-ostanovit-ateroskleroz-bazovyi"),
     "optimal": ("Optimal", 2590, "plan-pitaniya-ostanovit-ateroskleroz-optimalnyi"),
@@ -95,44 +88,23 @@ def show_plans(message):
 
 def send_payment_options(chat_id):
     keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("Международная карта (USD)", callback_data="international"))
-    keyboard.add(types.InlineKeyboardButton("Российская карта (RUB)", callback_data="russian"))
-    bot.send_message(chat_id, "Как вы планируете оплачивать?", reply_markup=keyboard)
+    for callback, (name, amount, _) in RUBLE_CHOICES.items():
+        keyboard.add(types.InlineKeyboardButton(
+            f"{name} — {amount:,} ₽".replace(",", " "),
+            callback_data=callback,
+        ))
+    bot.send_message(
+        chat_id,
+        TARIFF_DESCRIPTION + "\n\nНажмите кнопку с выбранным тарифом, чтобы перейти к оплате через Bizon365.",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data in ("plans", "international", "russian") or call.data in RUBLE_CHOICES)
 def handle_choice(call):
     bot.answer_callback_query(call.id)
-    if call.data == "plans":
+    if call.data in ("plans", "international", "russian"):
         send_payment_options(call.message.chat.id)
-    elif call.data == "international":
-        keyboard = types.InlineKeyboardMarkup()
-        for name, price, url in PAYMENT_LINKS.values():
-            keyboard.add(types.InlineKeyboardButton(f"{name} — {price}", url=url))
-        bot.send_message(
-            call.message.chat.id,
-            TARIFF_DESCRIPTION + "\n\n"
-            "Оплата откроется на защищённой странице Stripe.\n\n"
-            "После оплаты сохраните квитанцию. "
-            "Автоматическая выдача доступа пока настраивается.",
-            parse_mode="Markdown",
-            reply_markup=keyboard,
-        )
-    elif call.data == "russian":
-        if call.message.chat.type != "private":
-            bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
-            return
-        keyboard = types.InlineKeyboardMarkup()
-        for callback, (name, amount, _) in RUBLE_CHOICES.items():
-            keyboard.add(types.InlineKeyboardButton(
-                f"{name} — {amount:,} ₽".replace(",", " "),
-                callback_data=callback,
-            ))
-        bot.send_message(
-            call.message.chat.id,
-            TARIFF_DESCRIPTION + "\n\nНажмите кнопку с выбранным тарифом, чтобы перейти к оплате.",
-            parse_mode="Markdown",
-            reply_markup=keyboard,
-        )
     else:
         if call.message.chat.type != "private":
             bot.send_message(call.message.chat.id, "Для оплаты откройте личный чат с ботом.")
